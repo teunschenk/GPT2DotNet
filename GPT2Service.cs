@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Tiktoken;
 using TorchSharp;
+using System.Linq;
 
 public class GPT2Service
 {
@@ -36,6 +37,8 @@ public class GPT2Service
         torch.manual_seed(1337);
         torch.cuda.manual_seed(1337);
 
+        string[] stopTokens = { "\nUser" };
+
         var sw = Stopwatch.StartNew();
 
         using (torch.no_grad())
@@ -51,7 +54,21 @@ public class GPT2Service
                     var ix = torch.multinomial(topk_probs, num_samples: 1);                 // (5, 1)
                     var xcol = torch.gather(topk_indices, dim: -1, index: ix);              // (5, 1)
                     x = torch.cat([x, xcol], dim: 1);                                      // (5, 9), (5, 10), ...
-                    x.MoveToOuterDisposeScope();
+                    x.MoveToOuterDisposeScope();                    
+
+                    // Check if any of the generated tokens is a stop token based on the last 5 tokens in the sequence
+                    var lastTokensObj = x[0][^5..].tolist();
+                    var lastTokensList = ((System.Collections.ArrayList)lastTokensObj)
+                        .Cast<TorchSharp.Scalar>()
+                        .Select(s => s.ToInt64())
+                        .ToList();
+                    string lastTokensStr = string.Join("", lastTokensList.Select(t => encoder.Decode(new List<int> { (int)t })));
+                    if (stopTokens.Any(stop => lastTokensStr.Contains(stop)))
+                    {                        
+                        Console.WriteLine("\nStop token detected. Ending generation.");
+                        break;
+                    }
+
                     //print the newly generated token
                     var newToken = xcol[0][0].item<long>();
                     Console.Write($"{encoder.Decode(new List<int> { (int)newToken })}");

@@ -26,8 +26,9 @@ public class GPT2Service
         return model;
     }
 
-    public string GenerateText(int numSequences, int sequenceLength, string input)
+    public string GenerateText(int sequenceLength, string input)
     {
+        var numSequences = 1;
         var tokens = encoder.Encode(input);
         Console.WriteLine(input);
 

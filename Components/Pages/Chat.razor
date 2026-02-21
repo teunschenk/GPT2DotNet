@@ -1,0 +1,45 @@
+@page "/"
+
+<div style="display:flex; flex-direction:column; height:100%; padding:16px; gap:12px;">
+
+    @* Chat messages *@
+    <div id="chat-window" style="flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:8px;">
+        @foreach (var msg in _messages)
+        {
+            var isUser = msg.Role == "User";
+            <div style="display:flex; justify-content:@(isUser ? "flex-end" : "flex-start");">
+                <div style="max-width:70%; padding:10px 14px; border-radius:12px;
+                            background:@(isUser ? "#89b4fa" : "#313244");
+                            color:@(isUser ? "#1e1e2e" : "#cdd6f4");
+                            white-space:pre-wrap; word-wrap:break-word;">
+                    @msg.Text
+                </div>
+            </div>
+        }
+        @if (_generating)
+        {
+            <div style="display:flex; justify-content:flex-start;">
+                <div style="padding:10px 14px; border-radius:12px; background:#313244; color:#a6adc8; font-style:italic;">
+                    Generating…
+                </div>
+            </div>
+        }
+    </div>
+
+    @* Input bar *@
+    <form @onsubmit="Send" style="display:flex; gap:8px;">
+        <input @bind="_userInput" @bind:event="oninput" placeholder="Type a message…" disabled="@_generating"
+               style="flex:1; padding:10px 14px; border-radius:8px; border:1px solid #45475a;
+                      background:#181825; color:#cdd6f4; font-size:1rem; outline:none;" />
+        <button type="submit" disabled="@(_generating || string.IsNullOrWhiteSpace(_userInput))"
+                style="padding:10px 20px; border-radius:8px; border:none; background:#89b4fa;
+                       color:#1e1e2e; font-weight:600; cursor:pointer; font-size:1rem;">
+            Send
+        </button>
+        <button type="button" @onclick="Clear" disabled="@(_generating || _messages.Count == 0)"
+                style="padding:10px 20px; border-radius:8px; border:1px solid #45475a; background:transparent;
+                       color:#cdd6f4; font-weight:600; cursor:pointer; font-size:1rem;">
+            Clear
+        </button>
+    </form>
+</div>

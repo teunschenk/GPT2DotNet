@@ -38,7 +38,7 @@ public class GPT2Service
         torch.manual_seed(1337);
         torch.cuda.manual_seed(1337);
 
-        string[] stopTokens = { "\nUser" };
+        string[] stopTokens = { "\n", "\nQ:", "\nUser", "<|endoftext|>" };
 
         var sw = Stopwatch.StartNew();
 
@@ -48,17 +48,67 @@ public class GPT2Service
             {
                 using (var scope = torch.NewDisposeScope())
                 {
-                    var logits = model.forward(x);                                          // (5, T, 50257)
-                    logits = logits[.., -1, ..];                                            // (5, 50257)
-                    var probs = torch.nn.functional.softmax(logits, dim: -1);               // (5, 50257)
-                    var (topk_probs, topk_indices) = torch.topk(probs, k: 50, dim: -1);    // (5, 50)
-                    var ix = torch.multinomial(topk_probs, num_samples: 1);                 // (5, 1)
-                    var xcol = torch.gather(topk_indices, dim: -1, index: ix);              // (5, 1)
+                    var logits = model.forward(x);                                          // (B, T, 50257)
+                    logits = logits[.., -1, ..];                                            // (B, 50257)
+
+                    // Repetition penalty: penalize tokens already in the sequence
+                    var generatedTokens = new HashSet<long>();
+                    for (int t = 0; t < (int)x.size(1); t++)
+                        generatedTokens.Add(x[0][t].item<long>());
+                    foreach (var token in generatedTokens)
+                    {
+                        var score = logits[0][(int)token].item<float>();
+                        logits[0][(int)token] = score > 0 ? score / 1.2f : score * 1.2f;
+                    }
+
+                    // No-repeat n-gram (size 3): prevent repeating trigrams
+                    int ngramSize = 3;
+                    int seqLen = (int)x.size(1);
+                    if (seqLen >= ngramSize - 1)
+                    {
+                        var bannedTokens = new HashSet<long>();
+                        for (int j = 0; j <= seqLen - ngramSize; j++)
+                        {
+                            bool matchesSuffix = true;
+                            for (int k = 0; k < ngramSize - 1; k++)
+                            {
+                                if (x[0][j + k].item<long>() != x[0][seqLen - (ngramSize - 1) + k].item<long>())
+                                {
+                                    matchesSuffix = false;
+                                    break;
+                                }
+                            }
+                            if (matchesSuffix)
+                                bannedTokens.Add(x[0][j + ngramSize - 1].item<long>());
+                        }
+                        foreach (var token in bannedTokens)
+                            logits[0][(int)token] = float.NegativeInfinity;
+                    }
+
+                    // Temperature scaling
+                    logits = logits / 0.5f;
+
+                    // Top-k filtering: keep only top 40 tokens to remove long-tail noise
+                    int topK = 40;
+                    var (topkValues, _) = torch.topk(logits, topK, dim: -1);
+                    var minTopK = topkValues[.., -1].unsqueeze(-1);
+                    logits = torch.where(logits < minTopK, torch.tensor(float.NegativeInfinity, device: logits.device), logits);
+
+                    var probs = torch.nn.functional.softmax(logits, dim: -1);               // (B, 50257)
+
+                    // Top-p (nucleus) sampling with p=0.7
+                    var (sortedProbs, sortedIndices) = torch.sort(probs, dim: -1, descending: true);
+                    var cumulativeProbs = torch.cumsum(sortedProbs, dim: -1);
+                    var sortedMask = cumulativeProbs - sortedProbs > 0.7f;
+                    sortedProbs[sortedMask] = 0.0f;
+                    sortedProbs = sortedProbs / sortedProbs.sum(dim: -1, keepdim: true);
+                    var ix = torch.multinomial(sortedProbs, num_samples: 1);                 // (B, 1)
+                    var xcol = torch.gather(sortedIndices, dim: -1, index: ix);              // (B, 1)
                     x = torch.cat([x, xcol], dim: 1);                                      // (5, 9), (5, 10), ...
                     x.MoveToOuterDisposeScope();                    
 
-                    // Check if any of the generated tokens is a stop token based on the last 5 tokens in the sequence
-                    var lastTokensObj = x[0][^5..].tolist();
+                    // Check if any of the generated tokens is a stop token based on the last 10 tokens in the sequence
+                    var lastTokensObj = x[0][^10..].tolist();
                     var lastTokensList = ((System.Collections.ArrayList)lastTokensObj)
                         .Cast<TorchSharp.Scalar>()
                         .Select(s => s.ToInt64())

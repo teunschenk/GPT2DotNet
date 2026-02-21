@@ -14,7 +14,7 @@ public partial class Chat : ComponentBase
     protected string _userInput = string.Empty;
     protected bool _generating;
 
-    private const int SequenceLength = 100;
+    private const int SequenceLength = 60;
 
     protected void Clear()
     {
@@ -44,16 +44,19 @@ public partial class Chat : ComponentBase
     private string BuildPrompt()
     {
         var sb = new StringBuilder();
-        sb.AppendLine("The following is a conversation between a helpful AI assistant and a user.");
-        sb.AppendLine("The assistant gives direct, factual, concise answers and does not ask unnecessary questions.");
+        sb.AppendLine("You are a knowledgeable assistant.");
+        sb.AppendLine("Answer the question clearly and in one short sentence.");
         sb.AppendLine();
 
         foreach (var msg in _messages)
         {
-            sb.AppendLine($"{msg.Role}: {msg.Text}");
+            if (msg.Role == "User")
+                sb.AppendLine($"Q: {msg.Text}");
+            else
+                sb.AppendLine($"A: {msg.Text}");
         }
 
-        sb.Append("Assistant:");
+        sb.Append("A:");
         return sb.ToString();
     }
 
@@ -63,9 +66,16 @@ public partial class Chat : ComponentBase
             ? fullOutput[prompt.Length..]
             : fullOutput;
 
-        var stopIdx = reply.IndexOf("\nUser", StringComparison.Ordinal);
-        if (stopIdx >= 0)
-            reply = reply[..stopIdx];
+        // Stop at the earliest occurrence of any stop marker
+        string[] stopMarkers = ["\nQ:", "\nUser"];
+        int earliest = reply.Length;
+        foreach (var marker in stopMarkers)
+        {
+            var idx = reply.IndexOf(marker, StringComparison.Ordinal);
+            if (idx >= 0 && idx < earliest)
+                earliest = idx;
+        }
+        reply = reply[..earliest];
 
         return reply.Trim();
     }

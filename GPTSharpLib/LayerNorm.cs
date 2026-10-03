@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public sealed class LayerNorm : Module<Tensor, Tensor>
 {
     private readonly int normalizedShape;

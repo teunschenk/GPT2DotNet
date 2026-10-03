@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public class GenerationSettings
 {
     public float Temperature { get; set; } = 0.5f;

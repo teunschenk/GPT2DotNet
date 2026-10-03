@@ -1,4 +1,6 @@
-﻿public class CausalSelfAttention : Module<Tensor, Tensor>
+﻿namespace GPTSharpLib;
+
+public class CausalSelfAttention : Module<Tensor, Tensor>
 {
     private readonly Linear c_attn;
     private readonly Linear c_proj;

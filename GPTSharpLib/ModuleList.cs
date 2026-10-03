@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public sealed class ModuleList<T> : IReadOnlyList<T>
     where T : class
 {

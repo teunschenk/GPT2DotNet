@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public sealed class Linear : Module<Tensor, Tensor>
 {
     private readonly int inFeatures;

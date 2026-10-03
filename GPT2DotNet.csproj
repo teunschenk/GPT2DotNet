@@ -7,8 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Tiktoken" Version="2.2.0" />
-    <PackageReference Include="Tiktoken.Encodings.r50k" Version="2.2.0" />
+    <None Include="GPTSharpLib\GPTSharpLib.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="GPTSharpLib\**\*.cs" />
+    <ProjectReference Include="GPTSharpLib\GPTSharpLib.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public class Block : Module<Tensor, Tensor>
 {
     private readonly LayerNorm ln_1;

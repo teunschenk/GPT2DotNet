@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public class MLP : Module<Tensor, Tensor>
 {
     private readonly Linear c_fc;

@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public sealed class Tensor
 {
     public readonly float[] values;

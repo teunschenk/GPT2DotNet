@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public sealed class Embedding : IParameterModule
 {
     private readonly int numEmbeddings;

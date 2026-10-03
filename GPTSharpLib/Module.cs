@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public sealed record NamedParameter(string name, Tensor parameter);
 
 public interface IParameterModule

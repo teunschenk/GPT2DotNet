@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public static class TensorOperations
 {
     private static Random random = new();

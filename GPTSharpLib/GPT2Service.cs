@@ -2,6 +2,8 @@ using System.Diagnostics;
 using Tiktoken;
 using System.Linq;
 
+namespace GPTSharpLib;
+
 public class GPT2Service
 {
     private readonly GPT model;

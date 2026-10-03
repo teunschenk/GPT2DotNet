@@ -1,4 +1,6 @@
-﻿public enum GPT2ModelType
+﻿namespace GPTSharpLib;
+
+public enum GPT2ModelType
 {
     GPT2,
     GPT2Medium,

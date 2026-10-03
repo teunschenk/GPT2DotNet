@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
+namespace GPTSharpLib;
 
 /// <summary>
 /// Reads tensors from a safetensors file (the default weight format on Hugging Face Hub).

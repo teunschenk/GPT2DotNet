@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public class GPT : Module<Tensor, Tensor>
 {
     private readonly GPTConfig config;
@@ -64,7 +66,7 @@ public class GPT : Module<Tensor, Tensor>
 
         // Download model weights from Hugging Face Hub (cached locally)
         var cachePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            AppContext.BaseDirectory,
             ".cache", "gpt2dotnet", model_type);
         Directory.CreateDirectory(cachePath);
 

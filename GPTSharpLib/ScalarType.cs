@@ -1,3 +1,5 @@
+namespace GPTSharpLib;
+
 public enum ScalarType
 {
     Float16,

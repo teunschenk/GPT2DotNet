@@ -9,8 +9,6 @@
   <ItemGroup>
     <PackageReference Include="Tiktoken" Version="2.2.0" />
     <PackageReference Include="Tiktoken.Encodings.r50k" Version="2.2.0" />
-    <PackageReference Include="TorchSharp" Version="0.106.0" />
-    <PackageReference Include="TorchSharp-cuda-windows" Version="0.106.0" />
   </ItemGroup>
 
 </Project>

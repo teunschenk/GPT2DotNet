@@ -1,8 +1,3 @@
-using TorchSharp;
-using TorchSharp.Modules;
-using static TorchSharp.torch;
-using static TorchSharp.torch.nn;
-
 public class MLP : Module<Tensor, Tensor>
 {
     private readonly Linear c_fc;
@@ -10,8 +5,8 @@ public class MLP : Module<Tensor, Tensor>
 
     public MLP(GPTConfig config) : base(nameof(MLP))
     {
-        c_fc   = Linear(config.n_embd, 4 * config.n_embd);
-        c_proj = Linear(4 * config.n_embd, config.n_embd);
+        c_fc   = new Linear(config.n_embd, 4 * config.n_embd);
+        c_proj = new Linear(4 * config.n_embd, config.n_embd);
 
         RegisterComponents();
     }
@@ -19,10 +14,11 @@ public class MLP : Module<Tensor, Tensor>
     // MLP.forward
     public override Tensor forward(Tensor x)
     {
-        using var scope = torch.NewDisposeScope();
         x = c_fc.forward(x);
-        x = 0.5 * x * (1 + torch.tanh(Math.Sqrt(2.0 / Math.PI) * (x + 0.044715 * torch.pow(x, 3))));
+        var cubic = x.Pow(3f);
+        var inner = (x + 0.044715f * cubic) * 0.79788456f;
+        x = 0.5f * x * (1f + inner.Tanh());
         x = c_proj.forward(x);
-        return x.MoveToOuterDisposeScope();
+        return x;
     }
 }

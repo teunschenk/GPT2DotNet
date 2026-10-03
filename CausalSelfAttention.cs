@@ -1,9 +1,4 @@
-﻿using TorchSharp;
-using TorchSharp.Modules;
-using static TorchSharp.torch;
-using static TorchSharp.torch.nn;
-
-public class CausalSelfAttention : Module<Tensor, Tensor>
+﻿public class CausalSelfAttention : Module<Tensor, Tensor>
 {
     private readonly Linear c_attn;
     private readonly Linear c_proj;
@@ -16,9 +11,9 @@ public class CausalSelfAttention : Module<Tensor, Tensor>
             throw new ArgumentException("n_embd must be divisible by n_head");
 
         // key, query, value projections for all heads, but in a batch
-        c_attn = Linear(config.n_embd, 3 * config.n_embd);
+        c_attn = new Linear(config.n_embd, 3 * config.n_embd);
         // output projection
-        c_proj = Linear(config.n_embd, config.n_embd);
+        c_proj = new Linear(config.n_embd, config.n_embd);
 
         n_head = config.n_head;
         n_embd = config.n_embd;
@@ -28,10 +23,9 @@ public class CausalSelfAttention : Module<Tensor, Tensor>
 
     public override Tensor forward(Tensor x)
     {
-       using var scope = torch.NewDisposeScope();
-        long B = x.size(0); // batch size
-        long T = x.size(1); // sequence length
-        long C = x.size(2); // embedding dimensionality (n_embd)
+        var B = checked((int)x.size(0)); // batch size
+        var T = checked((int)x.size(1)); // sequence length
+        var C = checked((int)x.size(2)); // embedding dimensionality (n_embd)
 
         // calculate query, key, values for all heads in batch and move head forward to be the batch dim
         // nh is "number of heads", hs is "head size", and C (number of channels) = nh * hs
@@ -48,7 +42,7 @@ public class CausalSelfAttention : Module<Tensor, Tensor>
 
         // causal self-attention: apply causal mask then scaled dot-product attention
         
-        var y = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_casual: true);
+        var y = TensorOperations.nn.functional.scaled_dot_product_attention(q, k, v, is_causal: true);
 
         // re-assemble all head outputs side by side
         y = y.transpose(1, 2).contiguous().view(B, T, C);
@@ -56,7 +50,7 @@ public class CausalSelfAttention : Module<Tensor, Tensor>
         // output projection
         y = c_proj.forward(y);
 
-       return y.MoveToOuterDisposeScope();
+        return y;
     }
 }
 

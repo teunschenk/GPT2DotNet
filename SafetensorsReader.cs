@@ -1,7 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Text.Json;
-using TorchSharp;
-using static TorchSharp.torch;
+
 
 /// <summary>
 /// Reads tensors from a safetensors file (the default weight format on Hugging Face Hub).
@@ -64,17 +63,20 @@ public static class SafetensorsReader
 
     private static Tensor CreateTensor(byte[] data, long[] shape, ScalarType scalarType)
     {
-        var span = data.AsSpan();
-        Tensor tensor = scalarType switch
+        float[] values = scalarType switch
         {
-            ScalarType.Float32 => torch.tensor(MemoryMarshal.Cast<byte, float>(span).ToArray()),
-            ScalarType.Float64 => torch.tensor(MemoryMarshal.Cast<byte, double>(span).ToArray()),
-            ScalarType.Int32   => torch.tensor(MemoryMarshal.Cast<byte, int>(span).ToArray()),
-            ScalarType.Int64   => torch.tensor(MemoryMarshal.Cast<byte, long>(span).ToArray()),
-            ScalarType.Int16   => torch.tensor(MemoryMarshal.Cast<byte, short>(span).ToArray()),
-            ScalarType.Float16 => torch.tensor(MemoryMarshal.Cast<byte, Half>(span).ToArray()).to(ScalarType.Float16),
+            ScalarType.Float32 => MemoryMarshal.Cast<byte, float>(data.AsSpan()).ToArray(),
+            ScalarType.Float64 => MemoryMarshal.Cast<byte, double>(data.AsSpan()).ToArray().Select(value => (float)value).ToArray(),
+            ScalarType.Int32 => MemoryMarshal.Cast<byte, int>(data.AsSpan()).ToArray().Select(value => (float)value).ToArray(),
+            ScalarType.Int64 => MemoryMarshal.Cast<byte, long>(data.AsSpan()).ToArray().Select(value => (float)value).ToArray(),
+            ScalarType.Int16 => MemoryMarshal.Cast<byte, short>(data.AsSpan()).ToArray().Select(value => (float)value).ToArray(),
+            ScalarType.Int8 => MemoryMarshal.Cast<byte, sbyte>(data.AsSpan()).ToArray().Select(value => (float)value).ToArray(),
+            ScalarType.Byte => data.Select(value => (float)value).ToArray(),
+            ScalarType.Bool => data.Select(value => value == 0 ? 0f : 1f).ToArray(),
+            ScalarType.Float16 => MemoryMarshal.Cast<byte, Half>(data.AsSpan()).ToArray().Select(value => (float)value).ToArray(),
+            ScalarType.BFloat16 => MemoryMarshal.Cast<byte, ushort>(data.AsSpan()).ToArray().Select(value => BitConverter.Int32BitsToSingle(value << 16)).ToArray(),
             _ => throw new NotSupportedException($"Unsupported scalar type for tensor creation: {scalarType}")
         };
-        return tensor.reshape(shape);
+        return new Tensor(values, shape.Select(dimension => checked((int)dimension)).ToArray());
     }
 }

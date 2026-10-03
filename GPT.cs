@@ -1,9 +1,3 @@
-using TorchSharp;
-using TorchSharp.Modules;
-using static TorchSharp.torch;
-using static TorchSharp.torch.distributions;
-using static TorchSharp.torch.nn;
-
 public class GPT : Module<Tensor, Tensor>
 {
     private readonly GPTConfig config;
@@ -20,11 +14,11 @@ public class GPT : Module<Tensor, Tensor>
     {
         this.config = config;
 
-        wte     = Embedding(config.vocab_size, config.n_embd);
-        wpe     = Embedding(config.block_size, config.n_embd);
+        wte     = new Embedding(config.vocab_size, config.n_embd);
+        wpe     = new Embedding(config.block_size, config.n_embd);
         h       = new ModuleList<Block>(Enumerable.Range(0, config.n_layer).Select(_ => new Block(config)).ToArray());
-        ln_f    = LayerNorm(config.n_embd);
-        lm_head = Linear(config.n_embd, config.vocab_size, hasBias: false);
+        ln_f    = new LayerNorm(config.n_embd);
+        lm_head = new Linear(config.n_embd, config.vocab_size, hasBias: false);
 
         // weight sharing scheme
         wte.weight = lm_head.weight;
@@ -34,13 +28,12 @@ public class GPT : Module<Tensor, Tensor>
 
     public override Tensor forward(Tensor idx)
     {
-       using var scope = torch.NewDisposeScope();
-        long T = idx.size(1);
+        var T = checked((int)idx.size(1));
         if (T > config.block_size)
             throw new ArgumentException($"Cannot forward, model block size is exhausted. Got T={T}, block_size={config.block_size}");
 
         // shape (T)
-        var pos = torch.arange(0, T, dtype: ScalarType.Int64, device: idx.device);
+        var pos = TensorOperations.arange(0, T, dtype: ScalarType.Int64);
 
         var pos_emb = wpe.forward(pos);  // shape (T, n_embd)
         var tok_emb = wte.forward(idx);  // shape (B, T, n_embd)
@@ -52,7 +45,7 @@ public class GPT : Module<Tensor, Tensor>
         x = ln_f.forward(x);            // shape (B, T, n_embd)
         var logits = lm_head.forward(x); // shape (B, T, vocab_size)
 
-       return logits.MoveToOuterDisposeScope();
+        return logits;
     }
 
     public static GPT from_pretrained(GPT2ModelType modelType)
@@ -95,13 +88,18 @@ public class GPT : Module<Tensor, Tensor>
         // Create a from-scratch initialized model
         var model = new GPT(config);
         var sd = model.named_parameters().ToDictionary(p => p.name, p => p.parameter);
-        var sd_keys = sd.Keys.Where(k => !k.EndsWith(".attn.bias")).ToList();
        
-        //// named_parameters() may deduplicate the tied lm_head.weight; account for it
+        // named_parameters() may deduplicate the tied lm_head.weight; account for it
         if (!sd.ContainsKey("lm_head.weight"))
         {
             sd["lm_head.weight"] = sd["wte.weight"];
         }
+
+        // Hugging Face safetensors stores the shared token/output embedding once.
+        var sd_keys = sd.Keys
+            .Where(k => !k.EndsWith(".attn.bias"))
+            .Where(k => k != "lm_head.weight")
+            .ToList();
 
         // copy while ensuring all of the parameters are aligned and match in names and shapes
         var sd_keys_hf = sd_hf.Keys
@@ -114,63 +112,54 @@ public class GPT : Module<Tensor, Tensor>
         if (sd_keys_hf.Count != sd_keys.Count)
             throw new InvalidOperationException($"mismatched keys: {sd_keys_hf.Count} != {sd_keys.Count}");
 
-        using (torch.no_grad())
+        foreach (var k in sd_keys_hf)
         {
-            foreach (var k in sd_keys_hf)
+            // Map HF key to model key: strip "transformer." prefix, keep "lm_head.weight" as-is
+            var modelKey = k.StartsWith("transformer.") ? k["transformer.".Length..] : k;
+
+            if (transposed.Any(t => k.EndsWith(t)))
             {
-                // Map HF key to model key: strip "transformer." prefix, keep "lm_head.weight" as-is
-                var modelKey = k.StartsWith("transformer.") ? k["transformer.".Length..] : k;
-
-                if (transposed.Any(t => k.EndsWith(t)))
-                {
-                    // special treatment for the Conv1D weights we need to transpose
-                    if (!sd_hf[k].shape.Reverse().SequenceEqual(sd[modelKey].shape))
-                        throw new InvalidOperationException($"transposed shape mismatch for {k}");
-                    sd[modelKey].copy_(sd_hf[k].t());
-                }
-                else
-                {
-                    // vanilla copy over the other parameters
-                    if (!sd_hf[k].shape.SequenceEqual(sd[modelKey].shape))
-                        throw new InvalidOperationException($"shape mismatch for {k}");
-                    sd[modelKey].copy_(sd_hf[k]);
-                }
-
-                sd_hf[k].Dispose();
+                // special treatment for the Conv1D weights we need to transpose
+                if (!sd_hf[k].shape.Reverse().SequenceEqual(sd[modelKey].shape))
+                    throw new InvalidOperationException($"transposed shape mismatch for {k}");
+                sd[modelKey].copy_(sd_hf[k].t());
             }
+            else
+            {
+                // vanilla copy over the other parameters
+                if (!sd_hf[k].shape.SequenceEqual(sd[modelKey].shape))
+                    throw new InvalidOperationException($"shape mismatch for {k}");
+                sd[modelKey].copy_(sd_hf[k]);
+            }
+
         }
 
         // Verify that the model parameters were loaded correctly from the checkpoint.
         // Re-read the safetensors file for a spot-check comparison.
         var sd_verify = SafetensorsReader.ReadFile(modelPath);
-        using (torch.no_grad())
+        foreach (var k in sd_keys_hf)
         {
-            foreach (var k in sd_keys_hf)
-            {
-                var modelKey = k.StartsWith("transformer.") ? k["transformer.".Length..] : k;
-                var modelParam = sd[modelKey];
+            var modelKey = k.StartsWith("transformer.") ? k["transformer.".Length..] : k;
+            var modelParam = sd[modelKey];
 
-                Tensor expected;
-                if (transposed.Any(t => k.EndsWith(t)))
-                    expected = sd_verify[k].t();
-                else
-                    expected = sd_verify[k];
+            Tensor expected;
+            if (transposed.Any(t => k.EndsWith(t)))
+                expected = sd_verify[k].t();
+            else
+                expected = sd_verify[k];
 
-                if (!modelParam.shape.SequenceEqual(expected.shape))
-                    throw new InvalidOperationException(
-                        $"Verification failed: shape mismatch for '{modelKey}'. " +
-                        $"Model: [{string.Join(", ", modelParam.shape)}], " +
-                        $"Expected: [{string.Join(", ", expected.shape)}]");
+            if (!modelParam.shape.SequenceEqual(expected.shape))
+                throw new InvalidOperationException(
+                    $"Verification failed: shape mismatch for '{modelKey}'. " +
+                    $"Model: [{string.Join(", ", modelParam.shape)}], " +
+                    $"Expected: [{string.Join(", ", expected.shape)}]");
 
-                // allclose checks element-wise equality within tolerance
-                if (!torch.allclose(modelParam.to(expected.dtype), expected, rtol: 1e-3, atol: 1e-5))
-                    throw new InvalidOperationException(
-                        $"Verification failed: value mismatch for '{modelKey}'. " +
-                        $"Max diff: {(modelParam.to(expected.dtype) - expected).abs().max().item<float>()}");
+            // allclose checks element-wise equality within tolerance
+            if (!TensorOperations.allclose(modelParam, expected, rtol: 1e-3, atol: 1e-5))
+                throw new InvalidOperationException(
+                    $"Verification failed: value mismatch for '{modelKey}'. " +
+                    $"Max diff: {modelParam.max_abs_difference(expected)}");
 
-                expected.Dispose();
-                sd_verify[k].Dispose();
-            }
         }
         Console.WriteLine("Verification passed: all loaded weights match the checkpoint.");
 

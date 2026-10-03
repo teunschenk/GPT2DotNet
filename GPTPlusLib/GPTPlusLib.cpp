@@ -135,6 +135,63 @@ namespace gptplus
             return LinearForward(attentionOutput, Parameter(model, prefix + "c_proj.weight"), &Parameter(model, prefix + "c_proj.bias"));
         }
 
+        Tensor CachedAttention(const Tensor& input, const GPT::Implementation& model, int layer, GPT::Cache& cache)
+        {
+            const auto prefix = "h." + std::to_string(layer) + ".attn.";
+            const auto& projectionWeight = Parameter(model, prefix + "c_attn.weight");
+            const auto& projectionBias = Parameter(model, prefix + "c_attn.bias");
+            const auto qkv = LinearForward(input, projectionWeight, &projectionBias);
+            const auto tokens = input.shape()[1];
+            const auto channels = input.shape()[2];
+            const auto heads = model.configuration.headCount;
+            const auto headSize = channels / heads;
+            const auto cachedTokens = cache.tokenCount;
+            auto& cachedKeys = cache.keys[layer];
+            auto& cachedValues = cache.values[layer];
+            Tensor attentionOutput({ 1, tokens, channels });
+
+            for (int head = 0; head < heads; ++head)
+            for (int target = 0; target < tokens; ++target)
+            {
+                std::vector<float> scores(cachedTokens + target + 1);
+                float maximum = -std::numeric_limits<float>::infinity();
+                for (int source = 0; source <= cachedTokens + target; ++source)
+                {
+                    float score = 0.0F;
+                    for (int channel = 0; channel < headSize; ++channel)
+                    {
+                        const auto queryIndex = target * 3 * channels + head * headSize + channel;
+                        const auto key = source < cachedTokens
+                            ? cachedKeys[source * channels + head * headSize + channel]
+                            : qkv.values()[(source - cachedTokens) * 3 * channels + channels + head * headSize + channel];
+                        score += qkv.values()[queryIndex] * key;
+                    }
+                    scores[source] = score / std::sqrt(static_cast<float>(headSize));
+                    maximum = std::max(maximum, scores[source]);
+                }
+
+                float sum = 0.0F;
+                for (auto& score : scores) { score = std::exp(score - maximum); sum += score; }
+                for (int source = 0; source <= cachedTokens + target; ++source)
+                for (int channel = 0; channel < headSize; ++channel)
+                {
+                    const auto value = source < cachedTokens
+                        ? cachedValues[source * channels + head * headSize + channel]
+                        : qkv.values()[(source - cachedTokens) * 3 * channels + 2 * channels + head * headSize + channel];
+                    attentionOutput.values()[target * channels + head * headSize + channel] += scores[source] / sum * value;
+                }
+            }
+
+            for (int token = 0; token < tokens; ++token)
+            {
+                const auto offset = token * 3 * channels;
+                cachedKeys.insert(cachedKeys.end(), qkv.values().begin() + offset + channels, qkv.values().begin() + offset + 2 * channels);
+                cachedValues.insert(cachedValues.end(), qkv.values().begin() + offset + 2 * channels, qkv.values().begin() + offset + 3 * channels);
+            }
+
+            return LinearForward(attentionOutput, Parameter(model, prefix + "c_proj.weight"), &Parameter(model, prefix + "c_proj.bias"));
+        }
+
         GPTConfig ConfigFor(GPT2ModelType type)
         {
             switch (type)
@@ -303,6 +360,20 @@ namespace gptplus
     GPT::GPT(GPTConfig config) : implementation_(std::make_shared<Implementation>(std::move(config))) {}
     const GPTConfig& GPT::config() const noexcept { return implementation_->configuration; }
 
+    GPT::Cache GPT::createCache() const
+    {
+        const auto& configuration = implementation_->configuration;
+        Cache cache;
+        cache.keys.resize(configuration.layerCount);
+        cache.values.resize(configuration.layerCount);
+        for (int layer = 0; layer < configuration.layerCount; ++layer)
+        {
+            cache.keys[layer].reserve(configuration.blockSize * configuration.embeddingSize);
+            cache.values[layer].reserve(configuration.blockSize * configuration.embeddingSize);
+        }
+        return cache;
+    }
+
     Tensor GPT::forward(const Tensor& tokenIds) const
     {
         if (tokenIds.rank() != 2)
@@ -333,6 +404,45 @@ namespace gptplus
             const auto mlpInput = LinearForward(normalizedMlp, Parameter(*implementation_, prefix + "mlp.c_fc.weight"), &Parameter(*implementation_, prefix + "mlp.c_fc.bias"));
             hidden = Add(hidden, LinearForward(Gelu(mlpInput), Parameter(*implementation_, prefix + "mlp.c_proj.weight"), &Parameter(*implementation_, prefix + "mlp.c_proj.bias")));
         }
+        hidden = LayerNormForward(hidden, Parameter(*implementation_, "ln_f.weight"), Parameter(*implementation_, "ln_f.bias"));
+        return LinearForward(hidden, tokenEmbedding, nullptr);
+    }
+
+    Tensor GPT::forwardCached(const Tensor& tokenIds, Cache& cache) const
+    {
+        if (tokenIds.rank() != 2 || tokenIds.shape()[0] != 1)
+            throw std::invalid_argument("Cached GPT token IDs must have shape [1, tokens].");
+
+        const auto tokens = tokenIds.shape()[1];
+        const auto& configuration = implementation_->configuration;
+        if (cache.tokenCount < 0 || cache.tokenCount + tokens > configuration.blockSize)
+            throw std::invalid_argument("The cached input sequence exceeds the model block size.");
+        if (static_cast<int>(cache.keys.size()) != configuration.layerCount || static_cast<int>(cache.values.size()) != configuration.layerCount)
+            throw std::invalid_argument("The GPT cache does not match this model configuration.");
+
+        const auto& tokenEmbedding = Parameter(*implementation_, "wte.weight");
+        const auto& positionEmbedding = Parameter(*implementation_, "wpe.weight");
+        Tensor hidden({ 1, tokens, configuration.embeddingSize });
+        for (int token = 0; token < tokens; ++token)
+        {
+            const auto tokenId = static_cast<int>(tokenIds.values()[token]);
+            if (tokenId < 0 || tokenId >= configuration.vocabSize)
+                throw std::out_of_range("Token ID is outside the vocabulary.");
+            for (int channel = 0; channel < configuration.embeddingSize; ++channel)
+                hidden.values()[token * configuration.embeddingSize + channel] = tokenEmbedding.values()[tokenId * configuration.embeddingSize + channel] + positionEmbedding.values()[(cache.tokenCount + token) * configuration.embeddingSize + channel];
+        }
+
+        for (int layer = 0; layer < configuration.layerCount; ++layer)
+        {
+            const auto prefix = "h." + std::to_string(layer) + ".";
+            const auto normalized = LayerNormForward(hidden, Parameter(*implementation_, prefix + "ln_1.weight"), Parameter(*implementation_, prefix + "ln_1.bias"));
+            hidden = Add(hidden, CachedAttention(normalized, *implementation_, layer, cache));
+            const auto normalizedMlp = LayerNormForward(hidden, Parameter(*implementation_, prefix + "ln_2.weight"), Parameter(*implementation_, prefix + "ln_2.bias"));
+            const auto mlpInput = LinearForward(normalizedMlp, Parameter(*implementation_, prefix + "mlp.c_fc.weight"), &Parameter(*implementation_, prefix + "mlp.c_fc.bias"));
+            hidden = Add(hidden, LinearForward(Gelu(mlpInput), Parameter(*implementation_, prefix + "mlp.c_proj.weight"), &Parameter(*implementation_, prefix + "mlp.c_proj.bias")));
+        }
+
+        cache.tokenCount += tokens;
         hidden = LayerNormForward(hidden, Parameter(*implementation_, "ln_f.weight"), Parameter(*implementation_, "ln_f.bias"));
         return LinearForward(hidden, tokenEmbedding, nullptr);
     }
@@ -480,15 +590,16 @@ namespace gptplus
         auto tokens = tokenizer_.encode(input);
         if (tokens.empty()) throw std::invalid_argument("The prompt must produce at least one token.");
         std::mt19937 random(settings.seed);
+        auto cache = model_.createCache();
+        std::vector<float> inputValues;
+        inputValues.reserve(tokens.size());
+        for (const auto token : tokens)
+            inputValues.push_back(static_cast<float>(token));
+        auto logits = model_.forwardCached(Tensor(std::move(inputValues), { 1, static_cast<int>(tokens.size()) }), cache);
         for (int generated = 0; generated < settings.maxTokens && static_cast<int>(tokens.size()) < model_.config().blockSize; ++generated)
         {
-            std::vector<float> inputValues;
-            inputValues.reserve(tokens.size());
-            for (const auto token : tokens)
-                inputValues.push_back(static_cast<float>(token));
-            const auto logits = model_.forward(Tensor(std::move(inputValues), { 1, static_cast<int>(tokens.size()) }));
             std::vector<float> scores(model_.config().vocabSize);
-            const auto sourceOffset = (static_cast<int>(tokens.size()) - 1) * model_.config().vocabSize;
+            const auto sourceOffset = (logits.shape()[1] - 1) * model_.config().vocabSize;
             std::copy_n(logits.values().begin() + sourceOffset, scores.size(), scores.begin());
             std::set<int> used(tokens.begin(), tokens.end());
             for (const auto token : used) scores[token] = scores[token] > 0 ? scores[token] / settings.repetitionPenalty : scores[token] * settings.repetitionPenalty;
@@ -507,6 +618,8 @@ namespace gptplus
                       << " (total tokens: " << tokens.size() << ")\n";
             const auto recent = tokenizer_.decode(std::vector<int>(tokens.end() - std::min<std::size_t>(tokens.size(), 10), tokens.end()));
             if (recent.find("\nQ:") != std::string::npos || recent.find("\nUser") != std::string::npos || recent.find("<|endoftext|>") != std::string::npos) break;
+            if (generated + 1 < settings.maxTokens && static_cast<int>(tokens.size()) < model_.config().blockSize)
+                logits = model_.forwardCached(Tensor({ static_cast<float>(tokens.back()) }, { 1, 1 }), cache);
         }
         return tokenizer_.decode(tokens);
     }

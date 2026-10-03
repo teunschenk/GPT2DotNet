@@ -86,10 +86,18 @@ namespace gptplus
 	{
 	public:
 		struct Implementation;
+		struct Cache
+		{
+			int tokenCount = 0;
+			std::vector<std::vector<float>> keys;
+			std::vector<std::vector<float>> values;
+		};
 
 		explicit GPT(GPTConfig config);
 		static GPT load(const std::string& safetensorsPath, GPT2ModelType type = GPT2ModelType::GPT2);
 		Tensor forward(const Tensor& tokenIds) const;
+		Cache createCache() const;
+		Tensor forwardCached(const Tensor& tokenIds, Cache& cache) const;
 		const GPTConfig& config() const noexcept;
 
 	private:

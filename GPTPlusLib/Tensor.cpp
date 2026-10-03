@@ -97,12 +97,19 @@ namespace gptplus
 			outputShape[axis] = shape_[dimension];
 		}
 		Tensor output(outputShape);
+		std::vector<int> sourceStrides(rank());
+		for (int axis = 0; axis < rank(); ++axis) sourceStrides[axis] = strides_[dimensions[axis]];
 		for (int flat = 0; flat < output.length(); ++flat)
 		{
-			const auto outputIndices = Indices(flat, output.shape_, output.strides_);
-			std::vector<int> sourceIndices(rank());
-			for (int axis = 0; axis < rank(); ++axis) sourceIndices[dimensions[axis]] = outputIndices[axis];
-			output.values_[flat] = at(sourceIndices);
+			int remaining = flat;
+			int sourceFlat = 0;
+			for (int axis = 0; axis < rank(); ++axis)
+			{
+				const int index = remaining / output.strides_[axis];
+				remaining %= output.strides_[axis];
+				sourceFlat += index * sourceStrides[axis];
+			}
+			output.values_[flat] = values_[sourceFlat];
 		}
 		return output;
 	}

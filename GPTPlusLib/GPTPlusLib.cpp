@@ -2,10 +2,12 @@
 #include <cctype>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <numeric>
 #include <regex>
@@ -41,13 +43,19 @@ namespace gptplus
             Tensor output(outputShape);
             const auto inputWidth = weight.shape()[1];
             const auto outputWidth = weight.shape()[0];
-            for (int group = 0; group < input.length() / inputWidth; ++group)
+            const auto groupCount = input.length() / inputWidth;
+            const auto& inputValues = input.values();
+            const auto& weightValues = weight.values();
+            const auto* biasValues = bias == nullptr ? nullptr : &bias->values();
+            auto& outputValues = output.values();
+#pragma omp parallel for collapse(2) schedule(static)
+            for (int group = 0; group < groupCount; ++group)
             for (int outputIndex = 0; outputIndex < outputWidth; ++outputIndex)
             {
-                auto value = bias == nullptr ? 0.0F : bias->values()[outputIndex];
+                auto value = biasValues == nullptr ? 0.0F : (*biasValues)[outputIndex];
                 for (int inputIndex = 0; inputIndex < inputWidth; ++inputIndex)
-                    value += input.values()[group * inputWidth + inputIndex] * weight.values()[outputIndex * inputWidth + inputIndex];
-                output.values()[group * outputWidth + outputIndex] = value;
+                    value += inputValues[group * inputWidth + inputIndex] * weightValues[outputIndex * inputWidth + inputIndex];
+                outputValues[group * outputWidth + outputIndex] = value;
             }
             return output;
         }
@@ -123,6 +131,7 @@ namespace gptplus
                     attentionOutput.values()[((b * tokens + target) * channels) + h * headSize + channel] += scores[source] / sum * qkv.values()[valueIndex];
                 }
             }
+
             return LinearForward(attentionOutput, Parameter(model, prefix + "c_proj.weight"), &Parameter(model, prefix + "c_proj.bias"));
         }
 
@@ -168,18 +177,112 @@ namespace gptplus
             return input.transpose(0, 1);
         }
 
-        std::vector<std::string> Split(const std::string& value, char separator)
+        void AppendUtf8(std::string& output, int codePoint)
+        {
+            if (codePoint <= 0x7f)
+                output.push_back(static_cast<char>(codePoint));
+            else if (codePoint <= 0x7ff)
+            {
+                output.push_back(static_cast<char>(0xc0 | (codePoint >> 6)));
+                output.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+            }
+            else
+            {
+                output.push_back(static_cast<char>(0xe0 | (codePoint >> 12)));
+                output.push_back(static_cast<char>(0x80 | ((codePoint >> 6) & 0x3f)));
+                output.push_back(static_cast<char>(0x80 | (codePoint & 0x3f)));
+            }
+        }
+
+        int HexValue(char value)
+        {
+            if (value >= '0' && value <= '9') return value - '0';
+            if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+            if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+            throw std::runtime_error("Invalid JSON Unicode escape in GPT-2 vocabulary.");
+        }
+
+        std::string JsonUnescape(const std::string& value)
+        {
+            std::string result;
+            for (std::size_t index = 0; index < value.size(); ++index)
+            {
+                if (value[index] != '\\')
+                {
+                    result.push_back(value[index]);
+                    continue;
+                }
+                if (++index == value.size())
+                    throw std::runtime_error("Invalid JSON escape in GPT-2 vocabulary.");
+                if (value[index] != 'u')
+                {
+                    result.push_back(value[index]);
+                    continue;
+                }
+                if (index + 4 >= value.size())
+                    throw std::runtime_error("Incomplete JSON Unicode escape in GPT-2 vocabulary.");
+                auto codePoint = 0;
+                for (int digit = 0; digit < 4; ++digit)
+                    codePoint = (codePoint << 4) | HexValue(value[++index]);
+                AppendUtf8(result, codePoint);
+            }
+            return result;
+        }
+
+        std::vector<std::string> Utf8Pieces(const std::string& value)
         {
             std::vector<std::string> result;
-            std::stringstream stream(value);
-            for (std::string item; std::getline(stream, item, separator); ) result.push_back(item);
+            for (std::size_t index = 0; index < value.size(); )
+            {
+                const auto first = static_cast<unsigned char>(value[index]);
+                const auto length = first < 0x80 ? 1 : first < 0xe0 ? 2 : first < 0xf0 ? 3 : 4;
+                if (index + length > value.size())
+                    throw std::runtime_error("Invalid UTF-8 in GPT-2 tokenizer data.");
+                result.push_back(value.substr(index, length));
+                index += length;
+            }
             return result;
+        }
+
+        const std::array<std::string, 256>& ByteEncoder()
+        {
+            static const auto encoder = []
+            {
+                std::array<std::string, 256> result;
+                std::vector<int> bytes;
+                for (int value = 33; value <= 126; ++value) bytes.push_back(value);
+                for (int value = 161; value <= 172; ++value) bytes.push_back(value);
+                for (int value = 174; value <= 255; ++value) bytes.push_back(value);
+                auto codePoints = bytes;
+                for (int value = 0, next = 0; value < 256; ++value)
+                    if (std::find(bytes.begin(), bytes.end(), value) == bytes.end())
+                    {
+                        bytes.push_back(value);
+                        codePoints.push_back(256 + next++);
+                    }
+                for (std::size_t index = 0; index < bytes.size(); ++index)
+                    AppendUtf8(result[bytes[index]], codePoints[index]);
+                return result;
+            }();
+            return encoder;
+        }
+
+        const std::unordered_map<std::string, unsigned char>& ByteDecoder()
+        {
+            static const auto decoder = []
+            {
+                std::unordered_map<std::string, unsigned char> result;
+                const auto& encoder = ByteEncoder();
+                for (int value = 0; value < 256; ++value)
+                    result.emplace(encoder[value], static_cast<unsigned char>(value));
+                return result;
+            }();
+            return decoder;
         }
 
         std::vector<std::string> Bpe(const std::string& token, const std::unordered_map<std::string, int>& ranks)
         {
-            std::vector<std::string> parts;
-            for (const auto character : token) parts.emplace_back(1, character);
+            auto parts = Utf8Pieces(token);
             while (parts.size() > 1)
             {
                 int bestIndex = -1;
@@ -274,12 +377,14 @@ namespace gptplus
             if (!stream)
                 throw std::runtime_error("Unable to read tensor data: " + sourceName);
             auto name = sourceName.rfind("transformer.", 0) == 0 ? sourceName.substr(12) : sourceName;
-            if (name == "lm_head.weight" || name.find("attn.bias") != std::string::npos || name.find("masked_bias") != std::string::npos)
+            const auto isAttentionMask = name.size() >= 10 && name.compare(name.size() - 10, 10, ".attn.bias") == 0;
+            const auto isMaskedBias = name.size() >= 17 && name.compare(name.size() - 17, 17, ".attn.masked_bias") == 0;
+            if (name == "lm_head.weight" || isAttentionMask || isMaskedBias)
                 continue;
             Tensor tensor(std::move(values), std::move(shape));
             if (IsTransposedWeight(name))
                 tensor = TransposeWeight(tensor);
-            model.implementation_->parameters.emplace(std::move(name), std::move(tensor));
+            model.implementation_->parameters.insert_or_assign(std::move(name), std::move(tensor));
         }
         auto tokenEmbedding = model.implementation_->parameters.find("wte.weight");
         if (tokenEmbedding == model.implementation_->parameters.end())
@@ -293,15 +398,18 @@ namespace gptplus
         std::ifstream vocabFile(vocabBpePath);
         if (!encoderFile || !vocabFile) throw std::runtime_error("Unable to open GPT-2 tokenizer assets.");
         const std::string encoder((std::istreambuf_iterator<char>(encoderFile)), {});
-        const std::regex entry("\\\"([^\\\"]+)\\\"\\s*:\\s*([0-9]+)");
+        encoder_.clear();
+        decoder_.clear();
+        const std::regex entry(R"json("((\\.|[^"\\])*)"\s*:\s*([0-9]+))json");
         for (std::sregex_iterator match(encoder.begin(), encoder.end(), entry), end; match != end; ++match)
         {
-            const auto token = (*match)[1].str();
-            const auto id = std::stoi((*match)[2].str());
-            encoder_.emplace(token, id);
-            decoder_.emplace(id, token);
+            const auto token = JsonUnescape((*match)[1].str());
+            const auto id = std::stoi((*match)[3].str());
+            encoder_.insert_or_assign(token, id);
+            decoder_.insert_or_assign(id, token);
         }
-        if (encoder_.empty()) throw std::runtime_error("The GPT-2 encoder vocabulary is empty or invalid.");
+        if (encoder_.size() != 50257 || decoder_.size() != 50257)
+            throw std::runtime_error("The GPT-2 encoder vocabulary is incomplete.");
         std::string line;
         int rank = 0;
         while (std::getline(vocabFile, line))
@@ -314,9 +422,22 @@ namespace gptplus
         std::vector<int> result;
         for (std::size_t start = 0; start < text.size(); )
         {
-            auto end = start + 1;
-            while (end < text.size() && !std::isspace(static_cast<unsigned char>(text[end])) == !std::isspace(static_cast<unsigned char>(text[start]))) ++end;
-            const auto pieces = Bpe(text.substr(start, end - start), mergeRanks_);
+            auto end = start;
+            if (std::isspace(static_cast<unsigned char>(text[start])))
+            {
+                ++end;
+                while (end < text.size() && !std::isspace(static_cast<unsigned char>(text[end]))) ++end;
+            }
+            else
+            {
+                ++end;
+                while (end < text.size() && !std::isspace(static_cast<unsigned char>(text[end]))) ++end;
+            }
+
+            std::string encoded;
+            for (std::size_t index = start; index < end; ++index)
+                encoded += ByteEncoder()[static_cast<unsigned char>(text[index])];
+            const auto pieces = Bpe(encoded, mergeRanks_);
             for (const auto& piece : pieces)
             {
                 const auto iterator = encoder_.find(piece);
@@ -330,12 +451,22 @@ namespace gptplus
 
     std::string GPT2Tokenizer::decode(const std::vector<int>& tokens) const
     {
-        std::string result;
+        std::string encoded;
         for (const auto token : tokens)
         {
             const auto iterator = decoder_.find(token);
             if (iterator == decoder_.end()) throw std::out_of_range("Token ID is not in the loaded vocabulary.");
-            result += iterator->second;
+            encoded += iterator->second;
+        }
+
+        std::string result;
+        const auto& decoder = ByteDecoder();
+        for (const auto& piece : Utf8Pieces(encoded))
+        {
+            const auto iterator = decoder.find(piece);
+            if (iterator == decoder.end())
+                throw std::runtime_error("The GPT-2 vocabulary contains an invalid byte token.");
+            result.push_back(static_cast<char>(iterator->second));
         }
         return result;
     }
@@ -344,7 +475,7 @@ namespace gptplus
 
     std::string GPT2Service::generateText(const std::string& input, const GenerationSettings& settings) const
     {
-        if (settings.maxTokens <= 0 || settings.temperature <= 0.0F || settings.topK <= 0 || settings.ngramSize <= 0)
+		if (settings.maxTokens <= 0 || settings.temperature <= 0.0F || settings.topK <= 0 || settings.ngramSize <= 0)
             throw std::invalid_argument("Generation settings must be positive.");
         auto tokens = tokenizer_.encode(input);
         if (tokens.empty()) throw std::invalid_argument("The prompt must produce at least one token.");
@@ -372,6 +503,8 @@ namespace gptplus
             const auto probabilities = softmax(Tensor(scores, { 1, static_cast<int>(scores.size()) }));
             std::discrete_distribution<int> distribution(probabilities.values().begin(), probabilities.values().end());
             tokens.push_back(distribution(random));
+            std::clog << "Generated token " << generated + 1 << " of " << settings.maxTokens
+                      << " (total tokens: " << tokens.size() << ")\n";
             const auto recent = tokenizer_.decode(std::vector<int>(tokens.end() - std::min<std::size_t>(tokens.size(), 10), tokens.end()));
             if (recent.find("\nQ:") != std::string::npos || recent.find("\nUser") != std::string::npos || recent.find("<|endoftext|>") != std::string::npos) break;
         }

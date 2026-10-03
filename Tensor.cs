@@ -184,17 +184,23 @@ public sealed class Tensor
 
         var transposedShape = dimensions.Select(dimension => shape[dimension]).ToArray();
         var result = new Tensor(transposedShape);
-        var resultIndices = new int[Rank];
-        var sourceIndices = new int[Rank];
+        var sourceStrides = new int[Rank];
+        for (var axis = 0; axis < Rank; axis++)
+            sourceStrides[axis] = strides[dimensions[axis]];
 
-        for (var flatIndex = 0; flatIndex < result.Length; flatIndex++)
+        Parallel.For(0, result.Length, flatIndex =>
         {
-            GetIndices(flatIndex, result.strides, resultIndices);
+            var remaining = flatIndex;
+            var sourceFlatIndex = 0;
             for (var axis = 0; axis < Rank; axis++)
-                sourceIndices[dimensions[axis]] = resultIndices[axis];
+            {
+                var index = remaining / result.strides[axis];
+                remaining %= result.strides[axis];
+                sourceFlatIndex += index * sourceStrides[axis];
+            }
 
-            result.values[flatIndex] = values[GetFlatIndex(sourceIndices)];
-        }
+            result.values[flatIndex] = values[sourceFlatIndex];
+        });
 
         return result;
     }

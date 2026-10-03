@@ -36,20 +36,20 @@ public sealed class Linear : Module<Tensor, Tensor>
         var output = new Tensor(outputShape);
         var groupCount = input.Length / inFeatures;
 
-        for (var group = 0; group < groupCount; group++)
+        Parallel.For(0, checked(groupCount * outFeatures), index =>
         {
+            var group = index / outFeatures;
+            var outputFeature = index % outFeatures;
             var inputOffset = group * inFeatures;
             var outputOffset = group * outFeatures;
-            for (var outputFeature = 0; outputFeature < outFeatures; outputFeature++)
-            {
-                var weightOffset = outputFeature * inFeatures;
-                var value = bias?.values[outputFeature] ?? 0f;
-                for (var inputFeature = 0; inputFeature < inFeatures; inputFeature++)
-                    value += input.values[inputOffset + inputFeature] * weight.values[weightOffset + inputFeature];
+            var weightOffset = outputFeature * inFeatures;
+            var value = bias?.values[outputFeature] ?? 0f;
 
-                output.values[outputOffset + outputFeature] = value;
-            }
-        }
+            for (var inputFeature = 0; inputFeature < inFeatures; inputFeature++)
+                value += input.values[inputOffset + inputFeature] * weight.values[weightOffset + inputFeature];
+
+            output.values[outputOffset + outputFeature] = value;
+        });
 
         return output;
     }

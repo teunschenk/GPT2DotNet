@@ -30,7 +30,7 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <LocalDebuggerCommandArguments>"$(MSBuildProjectDirectory)\..\x64\Debug\bridge\.cache\gpt2dotnet\gpt2\model.safetensors" "$(MSBuildProjectDirectory)\..\x64\Debug\bridge\.cache\gpt2dotnet\gpt2\encoder.json" "$(MSBuildProjectDirectory)\..\x64\Debug\bridge\.cache\gpt2dotnet\gpt2\vocab.bpe" gpt2</LocalDebuggerCommandArguments>
+    <LocalDebuggerCommandArguments>"$(MSBuildProjectDirectory)\..\bin\Debug\net10.0\.cache\gpt2dotnet\gpt2-xl\model.safetensors" "$(MSBuildProjectDirectory)\..\x64\Debug\bridge\.cache\gpt2dotnet\gpt2\encoder.json" "$(MSBuildProjectDirectory)\..\x64\Debug\bridge\.cache\gpt2dotnet\gpt2\vocab.bpe" xl</LocalDebuggerCommandArguments>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>

@@ -617,7 +617,7 @@ namespace gptplus
             std::clog << "Generated token " << generated + 1 << " of " << settings.maxTokens
                       << " (total tokens: " << tokens.size() << ")\n";
             const auto recent = tokenizer_.decode(std::vector<int>(tokens.end() - std::min<std::size_t>(tokens.size(), 10), tokens.end()));
-            if (recent.find("\nQ:") != std::string::npos || recent.find("\nUser") != std::string::npos || recent.find("<|endoftext|>") != std::string::npos) break;
+            if (recent.find("\n") != std::string::npos || recent.find("<|endoftext|>") != std::string::npos) break;
             if (generated + 1 < settings.maxTokens && static_cast<int>(tokens.size()) < model_.config().blockSize)
                 logits = model_.forwardCached(Tensor({ static_cast<float>(tokens.back()) }, { 1, 1 }), cache);
         }

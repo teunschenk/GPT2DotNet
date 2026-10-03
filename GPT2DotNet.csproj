@@ -7,11 +7,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Include="console\console.vcxproj" />
+    <None Include="GPTPlusLib\GPTPlusLib.vcxproj" />
+    <None Include="GPTSharpConsoleBridge\GPTSharpConsoleBridge.csproj" />
     <None Include="GPTSharpLib\GPTSharpLib.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Remove="GPTSharpLib\**\*.cs" />
+    <Compile Remove="GPTSharpConsoleBridge\**\*.cs" />
+    <Content Remove="GPTSharpConsoleBridge\bin\**\*" />
+    <Content Remove="GPTSharpConsoleBridge\obj\**\*" />
+    <None Remove="GPTSharpConsoleBridge\bin\**\*" />
+    <None Remove="GPTSharpConsoleBridge\obj\**\*" />
     <ProjectReference Include="GPTSharpLib\GPTSharpLib.csproj" />
   </ItemGroup>
 
